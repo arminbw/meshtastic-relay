@@ -21,7 +21,20 @@ LOG = logging.getLogger("meshtastic_logger")
 
 def format_packet(packet):
     decoded = packet.get("decoded") or {}
+
+    def decode_text(value):
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        if isinstance(value, list):
+            return "".join(str(v) for v in value)
+        return str(value) if value is not None else None
+
     text = decoded.get("text") or decoded.get("payload")
+    if text is None and isinstance(decoded.get("data"), dict):
+        data = decoded.get("data")
+        text = data.get("text") or data.get("payload")
+
+    text = decode_text(text)
     if not text:
         return None
 
@@ -99,7 +112,14 @@ def main():
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_path.touch(exist_ok=True)
     LOG.info("logging incoming Meshtastic messages to %s", log_path)
-    pub.subscribe(make_on_receive(log_path), "meshtastic.receive")
+
+    for topic in [
+        "meshtastic.receive",
+        "meshtastic.receive.text",
+        "meshtastic.receive.data",
+    ]:
+        pub.subscribe(make_on_receive(log_path), topic)
+
     interface = None
 
     while True:
