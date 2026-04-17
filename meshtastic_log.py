@@ -60,16 +60,22 @@ def append_log(log_path: Path, message: str):
 
 
 def make_on_receive(log_path: Path):
-    def on_receive(packet, interface):
+    def on_receive(packet, interface=None):
         LOG.debug("meshtastic receive callback invoked packet=%s interface=%s", packet, interface)
         try:
             text = format_packet(packet)
-            if not text:
-                LOG.debug("skipping non-text packet: %s", packet)
-                return
-
             timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-            line = f"{timestamp} {text}\n"
+
+            if text:
+                line = f"{timestamp} {text}\n"
+            else:
+                sender = packet.get("fromId") or packet.get("from") or "unknown"
+                if isinstance(sender, int):
+                    sender = f"node-{sender}"
+                port = packet.get("decoded", {}).get("portnum")
+                line = f"{timestamp} [Meshtastic] received packet from {sender} port={port}\n"
+                LOG.debug("wrote fallback packet line for non-text packet")
+
             append_log(log_path, line)
             LOG.info("wrote packet to log: %s", log_path)
         except Exception:
@@ -119,8 +125,9 @@ def main():
         "meshtastic.receive.data",
         "meshtastic.receive",
     ]
+    callback = make_on_receive(log_path)
     for topic in topics:
-        subscriber, success = pub.subscribe(make_on_receive(log_path), topic)
+        subscriber, success = pub.subscribe(callback, topic)
         LOG.debug("subscribed to Meshtastic topic %s: success=%s", topic, success)
 
     interface = None
