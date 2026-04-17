@@ -61,6 +61,7 @@ def append_log(log_path: Path, message: str):
 
 def make_on_receive(log_path: Path):
     def on_receive(packet, interface):
+        LOG.debug("meshtastic receive callback invoked packet=%s interface=%s", packet, interface)
         try:
             text = format_packet(packet)
             if not text:
@@ -113,12 +114,14 @@ def main():
     log_path.touch(exist_ok=True)
     LOG.info("logging incoming Meshtastic messages to %s", log_path)
 
-    for topic in [
-        "meshtastic.receive",
+    topics = [
         "meshtastic.receive.text",
         "meshtastic.receive.data",
-    ]:
-        pub.subscribe(make_on_receive(log_path), topic)
+        "meshtastic.receive",
+    ]
+    for topic in topics:
+        subscriber, success = pub.subscribe(make_on_receive(log_path), topic)
+        LOG.debug("subscribed to Meshtastic topic %s: success=%s", topic, success)
 
     interface = None
 
