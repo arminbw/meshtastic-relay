@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+"""Meshtastic logger.
+
+This script uses the current Meshtastic Python API style:
+- subscribe with `pub.subscribe(on_receive, "meshtastic.receive")`
+- open the radio using `serial_interface.SerialInterface(device)`
+
+That matches the installed package examples in `meshtastic/__init__.py`.
+"""
 
 import argparse
 import logging
@@ -48,8 +56,7 @@ def make_on_receive(log_path: Path):
 
 def open_interface(device: str):
     LOG.info("opening Meshtastic device %s", device)
-    interface = serial_interface.SerialInterface(device)
-    return interface
+    return serial_interface.SerialInterface(device)
 
 
 def main():
@@ -79,16 +86,15 @@ def main():
     )
 
     log_path = Path(args.log_file).expanduser()
-    on_receive_callback = make_on_receive(log_path)
-    pub.subscribe(on_receive_callback, "meshtastic.receive")
+    pub.subscribe(make_on_receive(log_path), "meshtastic.receive")
     interface = None
 
     while True:
         try:
             interface = open_interface(args.device)
             LOG.info("Meshtastic logger started; waiting for messages")
-            interface.waitForConnection()
-            interface.loop()
+            while True:
+                time.sleep(1)
         except KeyboardInterrupt:
             LOG.info("shutting down logger")
             break
