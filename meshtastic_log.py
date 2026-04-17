@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """A simple Meshtastic text logger.
 
+Uses a simple TTY connection to the Meshtastic device.
 Only direct text messages are written to the log.
 """
 
@@ -15,16 +16,18 @@ from meshtastic import serial_interface
 LOG = logging.getLogger("meshtastic_logger")
 
 
-def decode_text(value):
+def decode_text(value) -> str | None:
+    if value is None:
+        return None
     if isinstance(value, bytes):
         try:
             return value.decode("utf-8")
         except UnicodeDecodeError:
             return None
-    return str(value) if value is not None else None
+    return str(value)
 
 
-def get_text(packet):
+def get_text(packet) -> str | None:
     decoded = packet.get("decoded") or {}
     text = decoded.get("text")
     if text is not None:
@@ -33,8 +36,10 @@ def get_text(packet):
     return decode_text(payload)
 
 
-def get_sender(packet):
+def get_sender(packet) -> str:
     sender = packet.get("fromId") or packet.get("from")
+    if sender is None:
+        return "unknown"
     if isinstance(sender, dict):
         return (
             sender.get("user_alias")
@@ -44,11 +49,10 @@ def get_sender(packet):
         )
     if isinstance(sender, int):
         return f"node-{sender}"
-    return str(sender) if sender is not None else "unknown"
+    return str(sender)
 
 
-def append_log(log_path: Path, message: str):
-    log_path.parent.mkdir(parents=True, exist_ok=True)
+def append_log(log_path: Path, message: str) -> None:
     with log_path.open("a", encoding="utf-8") as handle:
         handle.write(message)
 
@@ -60,14 +64,9 @@ def on_receive(packet, interface=None):
 
     sender = get_sender(packet)
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-    line = f"{timestamp} [Meshtastic] {sender}: {text}\n"
+    line = f"{timestamp} {sender}: {text}\n"
     append_log(on_receive.log_path, line)
     LOG.info("wrote packet to log: %s", on_receive.log_path)
-
-
-def open_interface(device: str):
-    LOG.info("opening Meshtastic device %s", device)
-    return serial_interface.SerialInterface(device)
 
 
 def main():
@@ -105,7 +104,8 @@ def main():
     interface = None
     while True:
         try:
-            interface = open_interface(args.device)
+            LOG.info("opening Meshtastic device %s", args.device)
+            interface = serial_interface.SerialInterface(args.device)
             LOG.info("Meshtastic logger started; waiting for text messages")
             while True:
                 time.sleep(1)
