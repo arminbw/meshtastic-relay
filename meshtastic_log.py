@@ -25,11 +25,18 @@ def format_packet(packet):
     if not text:
         return None
 
-    sender = (
-        packet.get("from", {}).get("user_alias")
-        or packet.get("from", {}).get("userid")
-        or "unknown"
-    )
+    sender = packet.get("fromId") or packet.get("from")
+    if isinstance(sender, dict):
+        sender = (
+            sender.get("user_alias")
+            or sender.get("userid")
+            or sender.get("name")
+        )
+    if sender is None:
+        sender = "unknown"
+    if isinstance(sender, int):
+        sender = f"node-{sender}"
+
     return f"[Meshtastic] {sender}: {text}"
 
 
@@ -41,15 +48,18 @@ def append_log(log_path: Path, message: str):
 
 def make_on_receive(log_path: Path):
     def on_receive(packet, interface):
-        text = format_packet(packet)
-        if not text:
-            LOG.debug("skipping non-text packet: %s", packet)
-            return
+        try:
+            text = format_packet(packet)
+            if not text:
+                LOG.debug("skipping non-text packet: %s", packet)
+                return
 
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        line = f"{timestamp} {text}\n"
-        append_log(log_path, line)
-        LOG.info("wrote packet to log: %s", log_path)
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            line = f"{timestamp} {text}\n"
+            append_log(log_path, line)
+            LOG.info("wrote packet to log: %s", log_path)
+        except Exception:
+            LOG.exception("error processing received packet")
 
     return on_receive
 
@@ -86,6 +96,9 @@ def main():
     )
 
     log_path = Path(args.log_file).expanduser()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.touch(exist_ok=True)
+    LOG.info("logging incoming Meshtastic messages to %s", log_path)
     pub.subscribe(make_on_receive(log_path), "meshtastic.receive")
     interface = None
 
