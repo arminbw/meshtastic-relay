@@ -5,6 +5,7 @@ import logging
 import time
 from pathlib import Path
 
+from pubsub import pub
 from meshtastic import serial_interface
 
 LOG = logging.getLogger("meshtastic_logger")
@@ -45,10 +46,9 @@ def make_on_receive(log_path: Path):
     return on_receive
 
 
-def open_interface(device: str, on_receive_callback):
+def open_interface(device: str):
     LOG.info("opening Meshtastic device %s", device)
     interface = serial_interface.SerialInterface(device)
-    interface.onReceive += on_receive_callback
     return interface
 
 
@@ -80,11 +80,12 @@ def main():
 
     log_path = Path(args.log_file).expanduser()
     on_receive_callback = make_on_receive(log_path)
+    pub.subscribe(on_receive_callback, "meshtastic.receive")
     interface = None
 
     while True:
         try:
-            interface = open_interface(args.device, on_receive_callback)
+            interface = open_interface(args.device)
             LOG.info("Meshtastic logger started; waiting for messages")
             interface.waitForConnection()
             interface.loop()
