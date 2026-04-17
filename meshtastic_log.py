@@ -120,15 +120,9 @@ def main():
     log_path.touch(exist_ok=True)
     LOG.info("logging incoming Meshtastic messages to %s", log_path)
 
-    topics = [
-        "meshtastic.receive.text",
-        "meshtastic.receive.data",
-        "meshtastic.receive",
-    ]
     callback = make_on_receive(log_path)
-    for topic in topics:
-        subscriber, success = pub.subscribe(callback, topic)
-        LOG.debug("subscribed to Meshtastic topic %s: success=%s", topic, success)
+    subscriber, success = pub.subscribe(callback, "meshtastic.receive")
+    LOG.debug("subscribed to Meshtastic topic meshtastic.receive: success=%s", success)
 
     interface = None
 
