@@ -1,0 +1,46 @@
+# Meshtastic relay configuration.
+# Copy this file to config.toml. Then edit the values.
+# config.toml is not in git.
+
+device = "/dev/ttyUSB0"
+
+[logs]
+all        = "~/meshtastic_messages.log"
+important  = "~/meshtastic_important.log"
+
+[labels]
+# Your long name. The relay finds it at any position in the text.
+mention_substrings = ["YourLongName"]
+# Your short name. The relay finds it only as a separate word.
+# This prevents a match inside a longer word.
+mention_words = ["YourShort"]
+
+[important]
+# The relay copies messages with these labels to the important log.
+# The main log always gets all messages.
+# The favorite label uses the isFavorite flag on the device.
+# Your own node never gets the favorite label.
+labels = ["dm", "mention", "favorite"]
+
+[notify]
+labels = ["dm"]
+
+[notify.email]
+# Do not put the password here.
+# Set it in the environment variable MESH_SMTP_PASSWORD.
+enabled = false
+to      = "you@example.com"
+user    = "you@example.com"
+host    = "smtp.example.com"
+port    = 465
+timeout = 20
+
+[channels]
+# No value: log all channels.
+# include = [0, 2]
+
+[connection]
+# Reconnect if no packet arrives in this time.
+# The mesh sends telemetry often. Silence means the link is dead.
+watchdog_seconds = 1800
+retry_seconds    = 10
