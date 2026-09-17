@@ -9,9 +9,9 @@ all        = "~/meshtastic_messages.log"
 important  = "~/meshtastic_important.log"
 
 [labels]
-# Your long name. The relay finds it at any position in the text.
+# Our long name. The relay finds it at any position in the text.
 mention_substrings = ["YourLongName"]
-# Your short name. The relay finds it only as a separate word.
+# Our short name. The relay finds it only as a separate word.
 # This prevents a match inside a longer word.
 mention_words = ["YourShort"]
 
@@ -19,11 +19,11 @@ mention_words = ["YourShort"]
 # The relay copies messages with these labels to the important log.
 # The main log always gets all messages.
 # The favorite label uses the isFavorite flag on the device.
-# Your own node never gets the favorite label.
+# Our own node never gets the favorite label.
 labels = ["dm", "mention", "favorite"]
 
 [notify]
-labels = ["dm"]
+labels = ["dm", "mention"]
 
 [notify.email]
 # Do not put the password here.

@@ -7,8 +7,6 @@ It sends email for the messages you choose.
 The classification is in labels.py.
 """
 
-from __future__ import annotations
-
 import argparse
 import logging
 import os
@@ -32,6 +30,9 @@ LOG = logging.getLogger("meshtastic_relay")
 # Only the password comes from the environment. config.toml is not in git.
 ENV_PASSWORD = "MESH_SMTP_PASSWORD"
 
+DEFAULT_CONFIG = Path(__file__).resolve().parent / "config.toml"
+HEARTBEAT_SECONDS = 3600
+
 
 # --------------------------------------------------------------------------- config
 
@@ -52,7 +53,7 @@ class Config:
     log_all: Path = Path("~/meshtastic_messages.log")
     log_important: Path = Path("~/meshtastic_important.log")
     important_labels: set[str] = field(default_factory=lambda: {"dm", "mention", "favorite"})
-    notify_labels: set[str] = field(default_factory=lambda: {"dm"})
+    notify_labels: set[str] = field(default_factory=lambda: {"dm", "mention"})
     mention_substrings: list[str] = field(default_factory=list)
     mention_words: list[str] = field(default_factory=list)
     channels_include: set[int] = field(default_factory=set)  # empty: all channels
@@ -62,38 +63,40 @@ class Config:
 
 
 def load_config(path: Path) -> Config:
-    """Read the TOML config. Use the defaults if the file does not exist."""
-    raw = {}
-    if path.exists():
-        with path.open("rb") as fh:
-            raw = tomllib.load(fh)
-        LOG.info("loaded config from %s", path)
-    else:
-        LOG.warning("no config at %s, using defaults", path)
+    """Read the TOML config. Stop if the file does not exist.
 
+    Missing values get the defaults from the dataclasses.
+    """
+    if not path.exists():
+        raise SystemExit(f"no config at {path}")
+    with path.open("rb") as fh:
+        raw = tomllib.load(fh)
+    LOG.info("loaded config from %s", path)
+
+    defaults = Config()
     logs = raw.get("logs", {})
-    marks = raw.get("labels", {})
+    label_cfg = raw.get("labels", {})
     email = raw.get("notify", {}).get("email", {})
     conn = raw.get("connection", {})
 
     return Config(
-        device=raw.get("device", Config.device),
-        log_all=Path(logs.get("all", "~/meshtastic_messages.log")).expanduser(),
-        log_important=Path(logs.get("important", "~/meshtastic_important.log")).expanduser(),
-        important_labels=set(raw.get("important", {}).get("labels", ["dm", "mention", "favorite"])),
-        notify_labels=set(raw.get("notify", {}).get("labels", ["dm"])),
-        mention_substrings=list(marks.get("mention_substrings", [])),
-        mention_words=list(marks.get("mention_words", [])),
+        device=raw.get("device", defaults.device),
+        log_all=Path(logs.get("all", defaults.log_all)).expanduser(),
+        log_important=Path(logs.get("important", defaults.log_important)).expanduser(),
+        important_labels=set(raw.get("important", {}).get("labels", defaults.important_labels)),
+        notify_labels=set(raw.get("notify", {}).get("labels", defaults.notify_labels)),
+        mention_substrings=list(label_cfg.get("mention_substrings", [])),
+        mention_words=list(label_cfg.get("mention_words", [])),
         channels_include=set(raw.get("channels", {}).get("include", [])),
-        watchdog_seconds=int(conn.get("watchdog_seconds", 1800)),
-        retry_seconds=int(conn.get("retry_seconds", 10)),
+        watchdog_seconds=int(conn.get("watchdog_seconds", defaults.watchdog_seconds)),
+        retry_seconds=int(conn.get("retry_seconds", defaults.retry_seconds)),
         email=EmailConfig(
-            enabled=bool(email.get("enabled", False)),
-            to=email.get("to", ""),
-            user=email.get("user", ""),
-            host=email.get("host", ""),
-            port=int(email.get("port", 465)),
-            timeout=int(email.get("timeout", 20)),
+            enabled=bool(email.get("enabled", defaults.email.enabled)),
+            to=email.get("to", defaults.email.to),
+            user=email.get("user", defaults.email.user),
+            host=email.get("host", defaults.email.host),
+            port=int(email.get("port", defaults.email.port)),
+            timeout=int(email.get("timeout", defaults.email.timeout)),
         ),
     )
 
@@ -114,46 +117,46 @@ def append(path: Path, line: str) -> None:
 class EmailNotifier:
     """Send email in a separate thread. SMTP must not block the radio."""
 
-    COALESCE_SECONDS = 5
+    BATCH_SECONDS = 5
 
     def __init__(self, cfg: EmailConfig):
         self.cfg = cfg
         self.password = os.environ.get(ENV_PASSWORD, "")
-        self.queue: queue.Queue[str] = queue.Queue(maxsize=200)
+        self.queue: queue.Queue[tuple[str, str]] = queue.Queue(maxsize=200)
+        missing = [name for name in ("to", "user", "host") if not getattr(cfg, name)]
         if not self.password:
-            LOG.error("email is on, but %s is not set", ENV_PASSWORD)
+            missing.append(ENV_PASSWORD)
+        if missing:
+            raise SystemExit(f"email is on, but these are not set: {', '.join(missing)}")
         threading.Thread(target=self._run, name="notifier", daemon=True).start()
 
-    def send(self, line: str) -> None:
+    def send(self, subject: str, body: str) -> None:
         try:
-            self.queue.put_nowait(line)
+            self.queue.put_nowait((subject, body))
         except queue.Full:
-            LOG.error("the notify queue is full. dropped: %s", line.strip())
+            LOG.error("the notify queue is full. dropped: %s", subject)
 
     def _run(self) -> None:
         while True:
             batch = [self.queue.get()]
-            time.sleep(self.COALESCE_SECONDS)  # put a burst into one email
-            while True:
-                try:
-                    batch.append(self.queue.get_nowait())
-                except queue.Empty:
-                    break
+            time.sleep(self.BATCH_SECONDS)  # put a burst into one email
+            while not self.queue.empty():
+                batch.append(self.queue.get_nowait())
             try:
                 self._deliver(batch)
             except Exception:
                 LOG.exception("cannot send the email for %d message(s)", len(batch))
 
-    def _deliver(self, lines: list[str]) -> None:
+    def _deliver(self, batch: list[tuple[str, str]]) -> None:
         msg = EmailMessage()
-        msg["Subject"] = "Meshtastic DM" if len(lines) == 1 else f"Meshtastic: {len(lines)} messages"
+        msg["Subject"] = batch[0][0] if len(batch) == 1 else f"Meshtastic: {len(batch)} messages"
         msg["From"] = self.cfg.user
         msg["To"] = self.cfg.to
-        msg.set_content("".join(lines))
+        msg.set_content("\n".join(body for _, body in batch))
         with smtplib.SMTP_SSL(self.cfg.host, self.cfg.port, timeout=self.cfg.timeout) as smtp:
             smtp.login(self.cfg.user, self.password)
             smtp.send_message(msg)
-        LOG.info("sent %d message(s) by email", len(lines))
+        LOG.info("sent %d message(s) by email", len(batch))
 
 
 # --------------------------------------------------------------------------- relay
@@ -168,33 +171,41 @@ class Relay:
         self.reconnect = threading.Event()
         self.last_packet = time.monotonic()
         self.seen: deque[int] = deque(maxlen=512)
-        self.seen_ids: set[int] = set()
+        # Counts for the hourly heartbeat log.
+        self.count_packets = 0
+        self.count_text = 0
+        self.count_important = 0
+        self.next_heartbeat = time.monotonic() + HEARTBEAT_SECONDS
 
     # -- node data. Read it live. A change on the device needs no restart.
 
-    def name_of(self, num, fallback_id=None) -> str:
+    def nodes(self) -> dict:
+        """Get the node list of the device. It is empty before the first connection."""
+        if self.iface is None or not self.iface.nodesByNum:
+            return {}
+        return self.iface.nodesByNum
+
+    def name_of(self, num) -> str:
         """Get the name of a node."""
         if num == labels.BROADCAST_NUM:
             return "all"
-        node = (getattr(self.iface, "nodesByNum", None) or {}).get(num) or {}
-        user = node.get("user") or {}
+        node = self.nodes().get(num, {})
+        user = node.get("user", {})
         if user.get("longName"):
             return user["longName"]
         if user.get("shortName"):
             return user["shortName"]
-        if fallback_id:
-            return str(fallback_id)
         return f"!{num:08x}" if isinstance(num, int) else "unknown"
 
     def favorite_nums(self) -> set[int]:
-        nodes = getattr(self.iface, "nodesByNum", None) or {}
-        return {num for num, node in nodes.items() if node.get("isFavorite")}
+        return {num for num, node in self.nodes().items() if node.get("isFavorite")}
 
     # -- handlers. The library calls them on its own thread.
 
     def on_any_packet(self, packet, interface):
         """Record the time. All packet types show that the link is alive."""
         self.last_packet = time.monotonic()
+        self.count_packets += 1
 
     def on_text(self, packet, interface):
         try:
@@ -202,7 +213,7 @@ class Relay:
         except Exception:
             LOG.exception("cannot process the packet. the relay continues")
 
-    def on_connection_lost(self, interface, topic=pub.AUTO_TOPIC):
+    def on_connection_lost(self, interface):
         LOG.warning("the device reports a lost connection")
         self.reconnect.set()
 
@@ -211,12 +222,9 @@ class Relay:
         pid = packet.get("id")
         if pid is None:
             return False
-        if pid in self.seen_ids:
+        if pid in self.seen:
             return True
-        if len(self.seen) == self.seen.maxlen:
-            self.seen_ids.discard(self.seen[0])
         self.seen.append(pid)
-        self.seen_ids.add(pid)
         return False
 
     def _handle_text(self, packet) -> None:
@@ -233,24 +241,26 @@ class Relay:
             LOG.debug("ignored channel %s", channel)
             return
 
-        sender_num = packet.get("from")
+        sender = self.name_of(packet.get("from"))
+        recipient = self.name_of(packet.get("to"))
         found = labels.labels_for(
-            packet, text, sender_num, self.my_num, self.favorite_nums(),
+            packet, text, self.my_num, self.favorite_nums(),
             self.cfg.mention_substrings, self.cfg.mention_words,
         )
-        line = labels.format_line(
-            time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
-            self.name_of(sender_num, packet.get("fromId")),
-            self.name_of(packet.get("to"), packet.get("toId")),
-            found,
-            text,
-        )
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        self.count_text += 1
 
+        # Queue the email first. A failed file write must not stop it.
+        if self.notifier and found & self.cfg.notify_labels:
+            self.notifier.send(
+                labels.format_subject(sender, recipient),
+                labels.format_email(timestamp, sender, recipient, found, text, packet),
+            )
+        line = labels.format_line(timestamp, sender, recipient, found, text)
         append(self.cfg.log_all, line)
         if found & self.cfg.important_labels:
+            self.count_important += 1
             append(self.cfg.log_important, line)
-        if self.notifier and found & self.cfg.notify_labels:
-            self.notifier.send(line)
 
     # -- connection
 
@@ -280,10 +290,22 @@ class Relay:
         This watchdog finds that condition.
         """
         while not self.reconnect.wait(5):
+            self._heartbeat()
             idle = time.monotonic() - self.last_packet
             if idle > self.cfg.watchdog_seconds:
                 LOG.warning("no packet for %.0f s. the relay reconnects", idle)
                 return
+
+    def _heartbeat(self) -> None:
+        """Log the counts once an hour. This shows that the relay works."""
+        if time.monotonic() < self.next_heartbeat:
+            return
+        LOG.info(
+            "last hour: %d packets, %d text messages, %d important",
+            self.count_packets, self.count_text, self.count_important,
+        )
+        self.count_packets = self.count_text = self.count_important = 0
+        self.next_heartbeat = time.monotonic() + HEARTBEAT_SECONDS
 
     def run(self) -> None:
         pub.subscribe(self.on_text, "meshtastic.receive.text")
@@ -309,9 +331,7 @@ class Relay:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Log Meshtastic text messages")
-    parser.add_argument("--config", default="config.toml", help="TOML config file")
-    parser.add_argument("--device", help="use this serial device")
-    parser.add_argument("--log-file", help="use this main log file")
+    parser.add_argument("--config", default=DEFAULT_CONFIG, help="TOML config file")
     parser.add_argument("--verbose", action="store_true", help="write debug messages")
     args = parser.parse_args()
 
@@ -321,10 +341,6 @@ def main() -> None:
     )
 
     cfg = load_config(Path(args.config).expanduser())
-    if args.device:
-        cfg.device = args.device
-    if args.log_file:
-        cfg.log_all = Path(args.log_file).expanduser()
 
     for path in (cfg.log_all, cfg.log_important):
         path.parent.mkdir(parents=True, exist_ok=True)
