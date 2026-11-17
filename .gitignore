@@ -1,5 +1,3 @@
-meshtastic_to_signal_README.md
-meshtastic_log_README.md
 venv/
 __pycache__/
 *.log
