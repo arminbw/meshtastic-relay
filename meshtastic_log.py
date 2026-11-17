@@ -17,6 +17,7 @@ import time
 import tomllib
 from collections import deque
 from dataclasses import dataclass, field
+import email.utils
 from email.message import EmailMessage
 from pathlib import Path
 
@@ -152,6 +153,9 @@ class EmailNotifier:
         msg["Subject"] = batch[0][0] if len(batch) == 1 else f"Meshtastic: {len(batch)} messages"
         msg["From"] = self.cfg.user
         msg["To"] = self.cfg.to
+        # Spam filters add points if Date or Message-ID is missing.
+        msg["Date"] = email.utils.formatdate(localtime=True)
+        msg["Message-ID"] = email.utils.make_msgid(domain=self.cfg.user.rpartition("@")[2] or None)
         msg.set_content("\n".join(body for _, body in batch))
         with smtplib.SMTP_SSL(self.cfg.host, self.cfg.port, timeout=self.cfg.timeout) as smtp:
             smtp.login(self.cfg.user, self.password)
